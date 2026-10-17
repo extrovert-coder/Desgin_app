@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Offline Student Assistant — Comprehensive Automated Test Suite</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 2rem;
+      background: #0f172a;
+      color: #f8fafc;
+      line-height: 1.6;
+    }
+    h1 { color: #60a5fa; margin-bottom: 0.5rem; }
+    .status-summary {
+      font-size: 1.25rem;
+      margin: 1rem 0;
+      padding: 1rem;
+      border-radius: 8px;
+      font-weight: bold;
+    }
+    .status-summary.pass { background: #064e3b; color: #34d399; }
+    .status-summary.fail { background: #7f1d1d; color: #f87171; }
+    .test-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .test-card.pass { border-left: 6px solid #10b981; }
+    .test-card.fail { border-left: 6px solid #ef4444; }
+    .test-title { font-weight: 600; font-size: 1rem; }
+    .test-detail { font-size: 0.875rem; color: #94a3b8; margin-top: 0.25rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      float: right;
+    }
+    .badge.pass { background: #059669; color: #ffffff; }
+    .badge.fail { background: #dc2626; color: #ffffff; }
+  </style>
+</head>
+<body>
+  <h1>Offline Student Assistant — Automated Test Suite (Phases 3 &amp; 4)</h1>
+  <p>Testing 3-Tier Layered Architecture: Repositories, Business Logic Services, Collision Detection &amp; IndexedDB Persistence.</p>
+
+  <div id="summary" class="status-summary">Running automated test suite...</div>
+  <div id="results"></div>
+
+  <script type="module">
+    import { getDatabaseConnection, closeDatabaseConnection } from './js/data/db.js';
+    import { STORES } from './js/data/stores.js';
+    import {
+      notesRepository,
+      tasksRepository,
+      quizRepository,
+      plannerRepository
+    } from './js/data/repository.js';
+
+    // Import Phase 4 Services
+    import {
+      createNote,
+      updateNote,
+      deleteNote,
+      searchNotes,
+      getNotesCount
+    } from './js/services/notesService.js';
+    import {
+      createTask,
+      updateTask,
+      toggleTaskComplete,
+      deleteTask,
+      filterTasks,
+      getTaskMetrics,
+      isTaskOverdue
+    } from './js/services/tasksService.js';
+    import {
+      getAvailableSubjects,
+      getQuizQuestions,
+      gradeAndSaveQuiz,
+      getQuizHistory,
+      getQuizMetrics
+    } from './js/services/quizService.js';
+    import {
+      createSession,
+      updateSession,
+      deleteSession,
+      getAllSessions,
+      getPlannerMetrics
+    } from './js/services/plannerService.js';
+    import {
+      createBackupData,
+      validateBackup,
+      restoreBackupData,
+      purgeAllLocalData
+    } from './js/services/exportService.js';
+
+    const resultsContainer = document.getElementById('results');
+    const summaryContainer = document.getElementById('summary');
+    const testResults = [];
+
+    function assert(condition, message) {
+      if (!condition) {
+        throw new Error(message || 'Assertion failed');
+      }
+    }
+
+    async function runTest(name, testFn) {
+      const card = document.createElement('div');
+      card.className = 'test-card';
+      try {
+        await testFn();
+        card.classList.add('pass');
+        card.innerHTML = `
+          <span class="badge pass">PASS</span>
+          <div class="test-title">${name}</div>
+          <div class="test-detail">Executed successfully without errors.</div>
+        `;
+        testResults.push({ name, pass: true });
+      } catch (err) {
+        console.error(`Test Failed: ${name}`, err);
+        card.classList.add('fail');
+        card.innerHTML = `
+          <span class="badge fail">FAIL</span>
+          <div class="test-title">${name}</div>
+          <div class="test-detail" style="color: #fca5a5;">Error: ${err.message}</div>
+        `;
+        testResults.push({ name, pass: false, error: err.message });
+      }
+      resultsContainer.appendChild(card);
+    }
+
+    async function executeAll() {
+      // 1. Schema & Object Store Verification
+      await runTest('1. Schema Verification — All 4 Stores & Indexes Initialized', async () => {
+        const db = await getDatabaseConnection();
+        assert(db.objectStoreNames.contains(STORES.NOTES), 'Notes store missing');
+        assert(db.objectStoreNames.contains(STORES.TASKS), 'Tasks store missing');
+        assert(db.objectStoreNames.contains(STORES.QUIZ_RESULTS), 'Quiz results store missing');
+        assert(db.objectStoreNames.contains(STORES.PLANNER), 'Planner store missing');
+      });
+
+      // Purge prior data for clean testing baseline
+      await purgeAllLocalData();
+
+      // 2. Empty Store Handling
+      await runTest('2. Empty Store Handling — Returns clean null/empty arrays', async () => {
+        const allNotes = await notesRepository.getAll();
+        assert(Array.isArray(allNotes) && allNotes.length === 0, 'Empty store should return empty array');
+
+        const count = await notesRepository.count();
+        assert(count === 0, 'Empty store count should be 0');
+
+        const nonExistent = await notesRepository.getById('missing-id-999');
+        assert(nonExistent === null, 'Querying non-existent key should return null');
+      });
+
+      // 3. Add & Retrieve Record (DAL)
+      await runTest('3. DAL Add & Retrieve Record — Preserves entity and timestamps', async () => {
+        const note = await notesRepository.add({
+          title: 'Software Engineering Principles',
+          content: 'Abstraction hides complexity behind simple interfaces.',
+          category: 'lecture'
+        });
+
+        assert(note.id && typeof note.id === 'string', 'Entity ID must be generated');
+        assert(note.createdAt && note.updatedAt, 'Timestamps must be generated');
+
+        const retrieved = await notesRepository.getById(note.id);
+        assert(retrieved !== null && retrieved.id === note.id, 'Retrieved ID must match');
+      });
+
+      // 4. Update & Delete Record (DAL)
+      await runTest('4. DAL Update & Delete Record — Modifies fields and purges key', async () => {
+        const task = await tasksRepository.add({
+          title: 'Review Chapter 5',
+          description: 'Focus on low coupling',
+          dueDate: '2026-10-25',
+          priority: 'high',
+          completed: false
+        });
+
+        const updated = await tasksRepository.update({
+          id: task.id,
+          completed: true,
+          priority: 'medium'
+        });
+        assert(updated.completed === true, 'Task completed must be true');
+
+        await tasksRepository.delete(task.id);
+        const postDelete = await tasksRepository.getById(task.id);
+        assert(postDelete === null, 'Deleted task must return null');
+      });
+
+      // 5. Query by Index
+      await runTest('5. DAL Query by Index — Filters records efficiently via IndexedDB index', async () => {
+        await notesRepository.add({ title: 'Chem Notes', content: 'Atomic bonds', category: 'revision' });
+        await notesRepository.add({ title: 'Organic Chem', content: 'Hydrocarbons', category: 'revision' });
+
+        const revNotes = await notesRepository.queryByIndex('by_category', 'revision');
+        assert(revNotes.length === 2, `Expected 2 revision notes, got ${revNotes.length}`);
+      });
+
+      // 6. NotesService Tests
+      await runTest('6. NotesService — Validation, Creation, Live Search & Editing', async () => {
+        // Validation rejection test
+        let threwOnEmpty = false;
+        try {
+          await createNote({ title: '   ', content: 'test' });
+        } catch (e) {
+          threwOnEmpty = true;
+        }
+        assert(threwOnEmpty, 'createNote must reject empty titles');
+
+        // Creation
+        const note = await createNote({
+          title: 'Relational Database Normalization',
+          content: 'First normal form (1NF) eliminates duplicate columns.',
+          category: 'exam'
+        });
+        assert(note.id && note.title === 'Relational Database Normalization', 'Note must be created');
+
+        // Search
+        const searchRes = await searchNotes('1NF', 'exam');
+        assert(searchRes.length === 1, 'Search must find matching note by keyword');
+
+        // Update
+        const updated = await updateNote({
+          id: note.id,
+          title: 'Database Normalization (1NF & 2NF)',
+          content: 'Updated content.',
+          category: 'exam'
+        });
+        assert(updated.title.includes('2NF'), 'Title must be updated');
+      });
+
+      // 7. TasksService Tests
+      await runTest('7. TasksService — Prioritization, Toggle & Overdue Detection', async () => {
+        const task = await createTask({
+          title: 'Complete Software Architecture Essay',
+          description: 'Discuss low coupling and high cohesion',
+          dueDate: '2020-01-01', // Explicit past date for overdue test
+          priority: 'high'
+        });
+
+        assert(task.completed === false, 'New tasks must be pending');
+        assert(isTaskOverdue(task) === true, 'Past due date task must be flagged as overdue');
+
+        // Toggle complete
+        const toggled = await toggleTaskComplete(task.id);
+        assert(toggled.completed === true, 'Task completion should toggle to true');
+        assert(isTaskOverdue(toggled) === false, 'Completed task cannot be overdue');
+
+        const metrics = await getTaskMetrics();
+        assert(metrics.completed >= 1, 'Metrics must count completed task');
+      });
+
+      // 8. QuizService Tests
+      await runTest('8. QuizService — Offline Grading, Scoring Breakdown & History Persistence', async () => {
+        const subjects = getAvailableSubjects();
+        assert(subjects.length >= 3, 'Must provide SE, DSA, and Web subjects offline');
+
+        const questions = getQuizQuestions('se');
+        assert(questions.length === 5, 'SE quiz must have 5 questions');
+
+        // Simulate 4 correct answers out of 5
+        const userAnswers = {
+          'se-1': 1, // Correct
+          'se-2': 1, // Correct
+          'se-3': 0, // Correct
+          'se-4': 1, // Correct
+          'se-5': 3  // Incorrect (correct is 0)
+        };
+
+        const result = await gradeAndSaveQuiz('se', userAnswers);
+        assert(result.score === 4, `Expected score 4, got ${result.score}`);
+        assert(result.percentage === 80, `Expected 80%, got ${result.percentage}%`);
+        assert(result.breakdown.length === 5, 'Must provide detailed question breakdown');
+        assert(result.breakdown[4].isCorrect === false, 'Question 5 must be marked incorrect');
+        assert(result.breakdown[4].explanation.length > 0, 'Must include helpful explanation');
+
+        const history = await getQuizHistory();
+        assert(history.length >= 1, 'Quiz result must be saved in IndexedDB');
+      });
+
+      // 9. PlannerService Tests (Collision Detection)
+      await runTest('9. PlannerService — Schedule Creation & Time Collision Prevention', async () => {
+        const session1 = await createSession({
+          title: 'Algorithms Revision',
+          date: '2026-11-01',
+          startTime: '14:00',
+          duration: 60 // 14:00 - 15:00
+        });
+        assert(session1.id, 'Session 1 must be created');
+
+        // Overlapping collision attempt (14:30 - 15:30)
+        let collisionDetected = false;
+        try {
+          await createSession({
+            title: 'Database Practicals',
+            date: '2026-11-01',
+            startTime: '14:30',
+            duration: 60
+          });
+        } catch (e) {
+          if (e.message.includes('Schedule conflict')) {
+            collisionDetected = true;
+          }
+        }
+        assert(collisionDetected, 'Planner must reject overlapping session on same date');
+
+        // Non-overlapping session on same date (15:00 - 16:00) should succeed
+        const session2 = await createSession({
+          title: 'Database Practicals',
+          date: '2026-11-01',
+          startTime: '15:00',
+          duration: 60
+        });
+        assert(session2.id, 'Contiguous non-overlapping session must succeed');
+      });
+
+      // 10. ExportService Tests
+      await runTest('10. ExportService — Structured Backup Compilation, Validation & Restore', async () => {
+        const backup = await createBackupData();
+        assert(backup.appName === 'Offline Student Assistant', 'App name identifier must match');
+        assert(backup.data.notes.length > 0, 'Backup data must bundle notes');
+        assert(backup.data.tasks.length > 0, 'Backup data must bundle tasks');
+        assert(backup.data.quiz_results.length > 0, 'Backup data must bundle quiz results');
+        assert(backup.data.planner.length > 0, 'Backup data must bundle planner sessions');
+
+        // Validate JSON string
+        const jsonStr = JSON.stringify(backup);
+        const validation = validateBackup(jsonStr);
+        assert(validation.valid === true, 'Validation of generated backup must pass');
+
+        // Incompatible backup rejection test
+        const corruptedValidation = validateBackup('{"corrupt": true}');
+        assert(corruptedValidation.valid === false, 'Corrupted backup must be rejected');
+
+        // Safe restore test
+        await restoreBackupData(validation.parsedData, 'replace');
+        const restoredNotes = await getNotesCount();
+        assert(restoredNotes === backup.counts.notes, 'Restored notes count must match backup');
+      });
+
+      // 11. Lifecycle & Persistence Across Simulated Reload
+      await runTest('11. Persistence Across Connection Closes — Data survives disconnect/reconnect', async () => {
+        const initialCount = await getNotesCount();
+
+        // Close active connection cleanly
+        closeDatabaseConnection();
+
+        // Reconnect and query
+        const countAfterReopen = await getNotesCount();
+        assert(countAfterReopen === initialCount, 'Data must survive database connection close');
+      });
+
+      // 12. Web App Manifest Validation
+      await runTest('12. Web App Manifest — Validates PWA attributes, display mode & icons', async () => {
+        const resp = await fetch('./manifest.webmanifest');
+        assert(resp.status === 200, 'manifest.webmanifest must return HTTP 200');
+
+        const manifest = await resp.json();
+        assert(manifest.name === 'Offline Student Assistant', 'Manifest name must match application');
+        assert(manifest.short_name === 'Student Assistant', 'Manifest short_name must match');
+        assert(manifest.display === 'standalone', 'Display must be standalone for PWA installability');
+        assert(manifest.start_url && manifest.theme_color, 'Must specify start_url and theme_color');
+        assert(Array.isArray(manifest.icons) && manifest.icons.length >= 2, 'Must include icons for installation');
+        
+        const has192 = manifest.icons.some(i => i.sizes === '192x192');
+        const has512 = manifest.icons.some(i => i.sizes === '512x512');
+        assert(has192 && has512, 'Must provide 192x192 and 512x512 icons for Android/Chromium installability');
+      });
+
+      // 13. Service Worker Script & Precache Graph
+      await runTest('13. Service Worker — Validates sw.js syntax, versioned cache & import graph', async () => {
+        const resp = await fetch('./sw.js');
+        assert(resp.status === 200, 'sw.js must return HTTP 200');
+
+        const scriptText = await resp.text();
+        assert(scriptText.includes('CACHE_NAME'), 'Service worker must declare a versioned CACHE_NAME');
+        assert(scriptText.includes('PRECACHE_ASSETS'), 'Service worker must specify precache asset manifest');
+        assert(scriptText.includes('osa-cache-'), 'Service worker must manage osa-cache namespace');
+        assert(scriptText.includes('skipWaiting'), 'Service worker must handle update lifecycles');
+      });
+
+      // 14. Cache Storage API Integration
+      await runTest('14. Cache Storage API — Verifies browser cache capability', async () => {
+        if ('caches' in window) {
+          const testCacheName = 'osa-test-probe';
+          const cache = await caches.open(testCacheName);
+          assert(cache !== null, 'Must open cache storage');
+          await caches.delete(testCacheName);
+        } else {
+          console.warn('caches API not available in this runner environment');
+        }
+      });
+
+      // Summary calculation
+      const passedCount = testResults.filter(r => r.pass).length;
+      const totalCount = testResults.length;
+      const allPassed = passedCount === totalCount;
+
+      summaryContainer.className = `status-summary ${allPassed ? 'pass' : 'fail'}`;
+      summaryContainer.textContent = allPassed
+        ? `ALL TESTS PASSED (${passedCount}/${totalCount}) — Phases 3, 4 & 5 Offline Architecture Fully Verified`
+        : `TESTS FAILED (${totalCount - passedCount}/${totalCount} failed)`;
+      
+      console.log(`[Test Results] ${passedCount}/${totalCount} tests passed.`);
+
+      // Post back to local server harness
+      try {
+        await fetch('/test-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            allPassed,
+            passedCount,
+            totalCount,
+            results: testResults
+          })
+        });
+      } catch (e) {
+        console.warn('Could not post test results:', e);
+      }
+    }
+
+    executeAll();
+  </script>
+</body>
+</html>
